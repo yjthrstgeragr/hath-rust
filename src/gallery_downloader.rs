@@ -24,7 +24,7 @@ use crate::{error::Error, metrics::Metrics, rpc::RPCClient, util};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-const MAX_DOWNLOAD_TASK: u32 = 4;
+const MAX_DOWNLOAD_TASK: u32 = 8;
 
 pub struct GalleryDownloader {
     client: Arc<RPCClient>,

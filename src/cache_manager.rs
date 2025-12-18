@@ -115,7 +115,8 @@ impl CacheManager {
         shutdown: UnboundedSender<()>,
         metrics: Arc<Metrics>,
     ) -> Result<Arc<Self>, Error> {
-        let io_pool = Builder::new_multi_thread().thread_name("IO-Worker").worker_threads(20).build()?;
+        // Reduced worker threads for dual-core CPU to minimize context switching overhead
+        let io_pool = Builder::new_multi_thread().thread_name("IO-Worker").worker_threads(8).build()?;
         let new = Arc::new(Self {
             cache_dir: config.cache_dir.clone(),
             cache_state: Default::default(),
@@ -213,8 +214,17 @@ impl CacheManager {
             return None;
         }
         let path2 = path.clone();
-        let mut file_reader = match io_pool.spawn(async move { std::fs::File::open(&path2) }).await.ok()? {
-            Ok(file) => FileReader::new(io_pool.clone(), file, 64 * 1024), // 64KiB buffer
+        let mut file_reader = match io_pool.spawn(async move {
+            let file = std::fs::File::open(&path2)?;
+            #[cfg(unix)]
+            {
+                use rustix::fs::{fadvise, Advice};
+                let _ = fadvise(&file, 0, None, Advice::Sequential);
+                // let _ = fadvise(&file, 0, None, Advice::NoReuse); // 可选
+            }
+            Ok::<std::fs::File, std::io::Error>(file)
+        }).await.ok()? {
+            Ok::<std::fs::File, std::io::Error>(file) => FileReader::new(io_pool.clone(), file, 512 * 1024), // 512KB buffer
             Err(err) => {
                 error!("Open cache file error: path={:?}, err={}", &path, err);
                 return None;

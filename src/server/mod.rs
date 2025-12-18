@@ -23,7 +23,7 @@ use hyper_util::{
 };
 use log::{error, info};
 use parking_lot::Mutex;
-use quinn::{BloomTokenLog, Endpoint, TransportConfig, ValidationTokenConfig, crypto::rustls::QuicServerConfig};
+use quinn::{BloomTokenLog, Endpoint, TransportConfig, ValidationTokenConfig, crypto::rustls::QuicServerConfig, VarInt};
 use rustls::{
     ServerConfig,
     compress::CompressionCache,
@@ -69,7 +69,7 @@ impl Server {
         let listener = bind(SocketAddr::from(([0, 0, 0, 0], port)));
 
         let mut http = http1::Builder::new();
-        http.keep_alive(false)
+        http.keep_alive(true)
             .max_buf_size(16384) // SSL max record size is 16KiB
             .timer(TokioTimer::new())
             .title_case_headers(true)
@@ -129,7 +129,7 @@ fn create_ssl_config(provider: Arc<CryptoProvider>, cert_store: Arc<CertStore>) 
 
     // Prefer ChaCha20 on non-AES hardware.
     config.ignore_client_order = true;
-    config.prioritize_chacha = aes_support();
+    config.prioritize_chacha = !aes_support();
     // Only support ticket resumption.
     config.session_storage = Arc::new(NoServerSessionStorage {});
     config.ticketer = Ticketer::new().unwrap();
@@ -148,7 +148,7 @@ fn create_quic_config(provider: Arc<CryptoProvider>, cert_store: Arc<CertStore>)
 
     // Prefer ChaCha20 on non-AES hardware.
     ssl_config.ignore_client_order = true;
-    ssl_config.prioritize_chacha = aes_support();
+    ssl_config.prioritize_chacha = !aes_support();
     // Rustls QUIC 0-RTT require stateful resumption
     ssl_config.session_storage = ServerSessionMemoryCache::new(65536); // ~64 bytes per session, ~4MiB total
     ssl_config.send_tls13_tickets = 1;
@@ -161,8 +161,10 @@ fn create_quic_config(provider: Arc<CryptoProvider>, cert_store: Arc<CertStore>)
     let mut transport_config = TransportConfig::default();
     transport_config.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())); // TODO replace with BBRv3
     transport_config.send_fairness(false); // We don't need send fairness
-    transport_config.send_window(2500000); // 100Mbps * 200ms (2.5MB per connection) // TODO check size
+    transport_config.send_window(12582912); // 12MB (Optimized for 1Gbps @ 100ms)
     transport_config.max_idle_timeout(Some(Duration::from_secs(10).try_into().unwrap()));
+    transport_config.receive_window(VarInt::from_u32(1048576)); // 1MiB
+    transport_config.stream_receive_window(VarInt::from_u32(524288)); // 512KiB
     let mut validation_config = ValidationTokenConfig::default();
     validation_config.lifetime(Duration::from_hours(24)); // Match default alt-svc age
     validation_config.log(Arc::new(BloomTokenLog::new_expected_items(2 * 1024 * 1024, 65536))); // 2MiB & match rustls session storage
@@ -187,7 +189,7 @@ fn bind(addr: SocketAddr) -> TcpListener {
 
     socket.bind(addr).expect("Server listener bind error.");
     socket
-        .listen(512)
+        .listen(1024)
         .inspect(|_| info!("Server is listen on {addr}"))
         .expect("Server listener listen error.")
 }
@@ -251,7 +253,7 @@ async fn accept_loop(
             };
 
             // Disable nodelay after handshake
-            let _ = ssl_stream.get_ref().0.set_nodelay(false);
+            let _ = ssl_stream.get_ref().0.set_nodelay(true);
 
             // Process request
             let stream = TokioIo::new(ssl_stream); // Tokio to hyper trait

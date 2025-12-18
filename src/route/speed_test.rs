@@ -11,7 +11,7 @@ use bytes::{Bytes, BytesMut};
 
 use crate::{AppState, MAX_KEY_TIME_DRIFT, route::forbidden, util::string_to_hash};
 
-const BUFFER_SIZE: usize = 16384;
+const BUFFER_SIZE: usize = 1024 * 1024;
 
 // example: /t/5242880/1645930666/bce541b2a97788319e53a754b47e1801204ae7bf/43432228
 pub(super) async fn speedtest(
@@ -31,19 +31,22 @@ pub(super) fn random_response(size: u64) -> Response<Body> {
     Response::builder()
         .header(CONTENT_LENGTH, size)
         .body(Body::from_stream(stream! {
+            // Pre-allocate a larger, reusable buffer with random-looking data
+            // Repeating a 64KB pattern is effectively indistinguishable from true random noise for speed tests
+            // but significantly reduces CPU load compared to generating new random data.
             let mut buffer = BytesMut::zeroed(BUFFER_SIZE);
             fastrand::fill(&mut buffer);
             let buffer = buffer.freeze();
 
             let mut filled = 0;
             while filled < size {
-                let size = cmp::min(size - filled, BUFFER_SIZE as u64) as usize;
-                filled += size as u64;
-                if size == BUFFER_SIZE {
+                let chunk_size = cmp::min(size - filled, BUFFER_SIZE as u64) as usize;
+                filled += chunk_size as u64;
+                if chunk_size == BUFFER_SIZE {
                     yield Ok(buffer.clone());
-                    continue;
+                } else {
+                    yield Ok::<Bytes, Infallible>(buffer.slice(0..chunk_size));
                 }
-                yield Ok::<Bytes, Infallible>(buffer.slice(0..size));
             }
         }))
         .unwrap()

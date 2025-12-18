@@ -80,8 +80,10 @@ rustls = { git = "https://github.com/james58899/rustls.git", tag = "0.23.35-patc
 
 [profile.release]
 lto = true
-opt-level = "s"
+opt-level = 3
 strip = true
+codegen-units = 1
+panic = "abort"
 
 # Override package opt level
 [profile.release.package.aws-lc-rs]

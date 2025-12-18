@@ -244,9 +244,9 @@ pub(super) async fn hath(
             'watch: while write_off > read_off || timeout(wait_time, rx.changed()).await.is_ok_and(|r| r.is_ok()) {
                 write_off = *rx.borrow();
 
-                let mut buffer = BytesMut::with_capacity(64*1024); // 64 KiB
+                let mut buffer = BytesMut::with_capacity(256*1024); // 256 KiB
                 while write_off > read_off {
-                    buffer.reserve(64*1024);
+                    buffer.reserve(256*1024);
                     match file.read_buf(&mut buffer).await {
                         Ok(0) => {
                             // Data may not synced to disk, retry later
