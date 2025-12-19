@@ -6,6 +6,7 @@ use std::{
     },
     time::Duration,
     vec,
+    mem,
 };
 
 use axum::{Extension, Router, extract::Request, http::HeaderValue, response::Response, routing::get};
@@ -186,6 +187,31 @@ fn bind(addr: SocketAddr) -> TcpListener {
     let _ = socket.set_reuseaddr(true); // Without this need wait all connection close before restart
     let _ = socket.set_keepalive(true);
     let _ = socket.set_nodelay(true);
+
+    // Enable TCP Fast Open on the listener socket
+    // The value represents the queue length for pending TFO packets on Linux,
+    // or simply enables/disables it on other systems.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::io::AsRawFd;
+        // https://lwn.net/Articles/508865/
+        //
+        // The option value, qlen, specifies this server's limit on the size of the queue of TFO requests that have
+        // not yet completed the three-way handshake (see the remarks on prevention of resource-exhaustion attacks above).
+        //
+        // It was recommended to be `5` in this document.
+        //
+        // But since mio's TcpListener sets backlogs to 1024, it would be nice to have 1024 slots for handshaking TFO requests.
+        let queue: libc::c_int = 1024;
+
+        let _ = libc::setsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            libc::TCP_FASTOPEN,
+            &queue as *const _ as *const libc::c_void,
+            mem::size_of_val(&queue) as libc::socklen_t,
+        );
+    }
 
     socket.bind(addr).expect("Server listener bind error.");
     socket
